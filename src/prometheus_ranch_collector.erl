@@ -28,6 +28,8 @@ name(acceptors) ->
 	num_acceptors;
 name(connections) ->
 	num_connections;
+name(active_connections) ->
+	num_active_connections;
 name(memory) ->
 	proc_memory;
 name(heap_size) ->
@@ -53,6 +55,8 @@ help(acceptors) ->
 	"The number of acceptors.";
 help(connections) ->
 	"The number of connection processes.";
+help(active_connections) ->
+	"The number of active connection processes.";
 help(memory) ->
 	"The size in bytes of the process. This includes call stack, heap, and internal structures.";
 help(heap_size) ->
@@ -114,11 +118,15 @@ conns_sup_metrics(ConnsSups, Labels, Acc0) ->
 	lists:foldl(
 		fun
 			({Id, Pid}, Acc2) ->
+				Labels1 = [{pid, Pid}, {id, Id}|Labels],
 				Counts = supervisor:count_children(Pid),
 				NSups = proplists:get_value(supervisors, Counts, 0),
 				NWorkers = proplists:get_value(workers, Counts, 0),
-				Metric = prometheus_model_helpers:gauge_metric([{id, Id}, {pid, Pid}|Labels], NSups + NWorkers),
-				maps:update_with(connections, fun (Old) -> [Metric|Old] end, [Metric], Acc2)
+				NActive = ranch_conns_sup:active_connections(Pid),
+				AllMetric = prometheus_model_helpers:gauge_metric(Labels1, NSups + NWorkers),
+				ActiveMetric = prometheus_model_helpers:gauge_metric(Labels1, NActive),
+				Acc3 = maps:update_with(connections, fun (Old) -> [AllMetric|Old] end, [AllMetric], Acc2),
+				maps:update_with(active_connections, fun (Old) -> [ActiveMetric|Old] end, [ActiveMetric], Acc3)
 		end,
 		Acc1,
 		ConnsSups
