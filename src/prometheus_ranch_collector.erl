@@ -31,17 +31,17 @@ name(connections) ->
 name(active_connections) ->
 	num_active_connections;
 name(memory) ->
-	proc_memory_bytes;
+	proc_memory;
 name(heap_size) ->
-	proc_heap_size_bytes;
+	proc_heap_size_words;
 name(min_heap_size) ->
-	proc_min_heap_size_bytes;
+	proc_min_heap_size_words;
 name(min_bin_vheap_size) ->
-	proc_min_bin_vheap_size_bytes;
+	proc_min_bin_vheap_size_words;
 name(stack_size) ->
-	proc_stack_size_bytes;
+	proc_stack_size_words;
 name(total_heap_size) ->
-	proc_total_heap_size_bytes;
+	proc_total_heap_size_words;
 name(message_queue_len) ->
 	proc_message_queue_len;
 name(reductions) ->
@@ -60,17 +60,17 @@ help(active_connections) ->
 help(memory) ->
 	"The size in bytes of the process. This includes call stack, heap, and internal structures.";
 help(heap_size) ->
-	"The size in bytes of the youngest heap generation of the process. "
+	"The size in words of the youngest heap generation of the process. "
 	"This generation includes the process stack. This information is "
 	"highly implementation-dependent, and can change if the implementation changes.";
 help(min_heap_size) ->
-	"The minimum heap size, in bytes, for the process.";
+	"The minimum heap size for the process.";
 help(min_bin_vheap_size) ->
-	"The minimum binary virtual heap size, in bytes, for the process.";
+	"The minimum binary virtual heap size for the process.";
 help(stack_size) ->
-	"The stack size, in bytes, of the process.";
+	"The stack size, in words, of the process.";
 help(total_heap_size) ->
-	"The total size, in bytes, of all heap fragments of the process. "
+	"The total size, in words, of all heap fragments of the process. "
 	"This includes the process stack and any unreceived messages that "
 	"are considered to be part of the heap.";
 help(message_queue_len) ->
@@ -84,19 +84,6 @@ help(status) ->
 	"and `waiting=6'.";
 help(_) ->
 	"".
-
-convert_value(heap_size, Value) ->
-	2*Value;
-convert_value(min_heap_size, Value) ->
-	2*Value;
-convert_value(min_bin_vheap_size, Value) ->
-	2*Value;
-convert_value(stack_size, Value) ->
-	2*Value;
-convert_value(total_heap_size, Value) ->
-	2*Value;
-convert_value(_, Value) ->
-	Value.
 
 proc_status_to_int(exiting) -> 1;
 proc_status_to_int(suspended) -> 2;
@@ -179,7 +166,7 @@ metrics() ->
 	maps:fold(
 		fun
 			(Key, Value, Acc) ->
-				[{name(Key), gauge, help(Key), convert_value(Key, Value)}|Acc]
+				[{name(Key), gauge, help(Key), Value}|Acc]
 		end,
 		[],
 		ranch_metrics()
