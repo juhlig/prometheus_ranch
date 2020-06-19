@@ -1,5 +1,5 @@
 .erlang.mk
-.ranch_prometheus.plt
+.prometheus_ranch.plt
 *.d
 deps
 ebin/*.beam
