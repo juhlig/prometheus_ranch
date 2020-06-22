@@ -133,7 +133,10 @@ listener_metrics({Ref, Pid}, Labels, Acc0) ->
 	{ranch_conns_sup_sup, ConnsSupSup, supervisor, _} = lists:keyfind(ranch_conns_sup_sup, 1, Children),
 	Acc1 = conns_sup_sup_metrics(ConnsSupSup, Labels, Acc0),
 	{ranch_acceptors_sup, AcceptorsSup, supervisor, _} = lists:keyfind(ranch_acceptors_sup, 1, Children),
-	Acc2 = acceptors_sup_metrics(AcceptorsSup, Labels, Acc1),
+	Acc2 = case AcceptorsSup of
+		undefined -> Acc1;
+		_ -> acceptors_sup_metrics(AcceptorsSup, Labels, Acc1)
+	end,
 	config_metrics(Ref, Labels, Acc2).
 
 %% Metrics for configuration values of a listener.
