@@ -1,3 +1,76 @@
 = prometheus_ranch
 
-Prometheus collector for Ranch (Work in Progress)
+Prometheus collector for Ranch 2.x
+
+== Exposed metrics
+
+=== General listener metrics
+
+Metrics for each listener. +
+The labels of these metrics contain the listener name in the
+`listener` key.
+
+`ranch_num_acceptors_config`::
+The configured number of acceptors.
+
+`ranch_num_acceptors`::
+The actual number of acceptors. If the listener is suspended,
+this metric is absent.
+
+`ranch_num_conns_sups_config`::
+The configured number of connection supervisors.
+
+`ranch_num_conns_sups`::
+The actual number of connection supervisors.
+
+`ranch_num_listen_sockets_config`::
+The configured number of listen sockets.
+
+=== Connection supervisor metrics
+
+Metrics for each connection supervisor of a listener. +
+The labels of these metrics contain the listener name, the `pid`
+and `id` of the connection supervisor, and a `type` key with the
+value being `conns_sup`.
+
+`ranch_num_connections`::
+The number of connection processes hosted the connection supervisor.
+
+`ranch_num_active_connections`::
+The number of active connection processes hosted by the connection supervisor.
+
+=== Process metrics
+
+Metrics for the acceptor and connection supervisor processes comprising a
+listener. +
+The labels of these metrics contain the type (or role) of the process in the
+`type` key (either `acceptor` or `conns_sup`), and the `pid` and respective
+acceptor or connection supervisor `id`.
+
+`ranch_proc_memory_bytes`::
+The size of the process, in bytes.
+
+`ranch_proc_heap_size_bytes`::
+The size of the youngest heap generation of the process, in bytes.
+
+`ranch_proc_min_heap_size_bytes`::
+The minimum heap size of the process, in bytes.
+
+`ranch_proc_min_bin_vheap_size_bytes`::
+The minimum binary virtual heap size of the process, in bytes.
+
+`ranch_proc_stack_size_bytes`::
+The stack size of the process, in bytes.
+
+`ranch_proc_total_heap_size_bytes`::
+The total size of all heap fragments of the process, in bytes.
+
+`ranch_proc_message_queue_len`::
+The number of messages currently in the message queue of the process.
+
+`ranch_proc_reductions`::
+The number of reductions executed by the process.
+
+`ranch_proc_status`::
+The current status of the distribution process, represented as a numerical value.
+
