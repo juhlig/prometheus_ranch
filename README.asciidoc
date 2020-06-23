@@ -74,3 +74,12 @@ The number of reductions executed by the process.
 `ranch_proc_status`::
 The current status of the distribution process, represented as a numerical value.
 
+== Integration with Grafana
+
+For your convenience, a Grafana Dashboard comes bundled with this
+collector, kindly supplied by Loïc Hoguin from https://ninenines.eu[Nine Nines].
+
+This dashboard requires the https://grafana.com/grafana/plugins/flant-statusmap-panel[Statusmap]
+plugin.
+
+image::dashboards/ranch-dashboard.png[Ranch Dashboard]
