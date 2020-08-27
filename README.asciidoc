@@ -39,6 +39,12 @@ The number of connection processes hosted the connection supervisor.
 `ranch_num_active_connections`::
 The number of active connection processes hosted by the connection supervisor.
 
+`ranch_num_accepted_connections`::
+The number of connection processes accepted by the connection supervisor.
+
+`ranch_num_terminated_connections`::
+The number of connection processes terminated by the connection supervisor.
+
 === Process metrics
 
 Metrics for the acceptor and connection supervisor processes comprising a

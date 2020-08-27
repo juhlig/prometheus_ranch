@@ -18,7 +18,6 @@
 
 -export([deregister_cleanup/1]).
 -export([collect_mf/2]).
--import(prometheus_model_helpers, [create_mf/4, gauge_metric/2]).
 
 -include_lib("prometheus/include/prometheus.hrl").
 
@@ -40,11 +39,12 @@ collect_mf(_Registry, Callback) ->
 
 %% --- INTERNAL ---
 
--type metrics() :: #{atom() => [prometheus_model:'Metric'()]}.
+-type listener() :: {ranch:ref(), pid()}.
+-type metrics() :: #{atom() => {gauge | counter, [prometheus_model:'Metric'()]}}.
 -type labels() :: [{atom(), term()}].
 
 add_metric_family({Name, Type, Help, Metrics}, Callback) ->
-	Callback(create_mf(?METRIC_NAME(Name), Help, Type, Metrics)).
+	Callback(prometheus_model_helpers:create_mf(?METRIC_NAME(Name), Help, Type, Metrics)).
 
 %% Prometheus metric name for a ranch metric.
 -spec name(atom()) -> atom().
@@ -80,6 +80,10 @@ name(reductions) ->
 	proc_reductions;
 name(status) ->
 	proc_status;
+name(accepted_connections) ->
+	num_accepted_connections;
+name(terminated_connections) ->
+	num_terminated_connections;
 name(Name) ->
 	Name.
 
@@ -124,6 +128,10 @@ help(status) ->
 	"The status is represented as a numerical value where `exiting=1', "
 	"`suspended=2', `runnable=3', `garbage_collecting=4', `running=5' "
 	"and `waiting=6'.";
+help(accepted_connections) ->
+	"The number of connections accepted.";
+help(terminated_connections) ->
+	"The number of connections terminated.";
 help(_) ->
 	"".
 
@@ -141,72 +149,81 @@ ranch_metrics([{Ref, Pid}|Listeners], Acc0) ->
 	ranch_metrics(Listeners, Acc1).
 
 %% Metrics for an individual listener.
--spec listener_metrics({ranch:ref(), pid()}, labels(), metrics()) -> metrics().
-listener_metrics({Ref, Pid}, Labels, Acc0) ->
+-spec listener_metrics(listener(), labels(), metrics()) -> metrics().
+listener_metrics(Listener={_, Pid}, Labels, Acc0) ->
 	Children = supervisor:which_children(Pid),
 	{ranch_conns_sup_sup, ConnsSupSup, supervisor, _} = lists:keyfind(ranch_conns_sup_sup, 1, Children),
-	Acc1 = conns_sup_sup_metrics(ConnsSupSup, Labels, Acc0),
+	Acc1 = conns_sup_sup_metrics(Listener, ConnsSupSup, Labels, Acc0),
 	{ranch_acceptors_sup, AcceptorsSup, supervisor, _} = lists:keyfind(ranch_acceptors_sup, 1, Children),
 	Acc2 = case AcceptorsSup of
 		undefined -> Acc1;
-		_ -> acceptors_sup_metrics(AcceptorsSup, Labels, Acc1)
+		_ -> acceptors_sup_metrics(Listener, AcceptorsSup, Labels, Acc1)
 	end,
-	config_metrics(Ref, Labels, Acc2).
+	config_metrics(Listener, Labels, Acc2).
 
 %% Metrics for configuration values of a listener.
--spec config_metrics(ranch:ref(), labels(), metrics()) -> metrics().
-config_metrics(Ref, Labels, Acc0) ->
+-spec config_metrics(listener(), labels(), metrics()) -> metrics().
+config_metrics({Ref, _}, Labels, Acc) ->
 	Info = ranch:info(Ref),
 	TransOpts = maps:get(transport_options, Info, #{}),
 
 	NumLSocks = maps:get(num_listen_sockets, TransOpts, 1),
-	NumLSocksMetric = gauge_metric(Labels, NumLSocks),
-	Acc1 = update_metrics(listen_sockets_config, NumLSocksMetric, Acc0),
 	NumAcceptors = maps:get(num_acceptors, TransOpts, 10),
-	NumAcceptorsMetric = gauge_metric(Labels, NumAcceptors),
-	Acc2 = update_metrics(acceptors_config, NumAcceptorsMetric, Acc1),
 	NumConnsSups = maps:get(num_conns_sups, TransOpts, NumAcceptors),
-	NumConnsSupsMetric = gauge_metric(Labels, NumConnsSups),
-	update_metrics(conns_sups_config, NumConnsSupsMetric, Acc2).
+	update_metrics(
+		Labels,
+		[
+			{gauge, listen_sockets_config, NumLSocks},
+			{gauge, acceptors_config, NumAcceptors},
+			{gauge, conns_sups_config, NumConnsSups}
+		],
+		Acc
+	).
 
 %% Metrics for a listener's conns_sup_sup.
--spec conns_sup_sup_metrics(pid(), labels(), metrics()) -> metrics().
-conns_sup_sup_metrics(ConnsSupSup, Labels, Acc0) ->
+-spec conns_sup_sup_metrics(listener(), pid(), labels(), metrics()) -> metrics().
+conns_sup_sup_metrics(Listener, ConnsSupSup, Labels, Acc0) ->
 	ConnsSups = [{Id, Pid} || {{ranch_conns_sup, Id}, Pid, supervisor, _} <- supervisor:which_children(ConnsSupSup), is_pid(Pid)],
-	Acc1 = conns_sup_metrics(ConnsSups, [{type, conns_sup}|Labels], Acc0),
-	Metric = gauge_metric(Labels, length(ConnsSups)),
-	update_metrics(conns_sups, Metric, Acc1).
+	Acc1 = conns_sup_metrics(Listener, ConnsSups, [{type, conns_sup}|Labels], Acc0),
+	update_metrics(Labels, [{gauge, conns_sups, length(ConnsSups)}], Acc1).
 
 %% Metrics for an individual conn_sup.
--spec conns_sup_metrics([{term(), pid()}], labels(), metrics()) -> metrics().
-conns_sup_metrics(ConnsSups, Labels, Acc0) ->
+-spec conns_sup_metrics(listener(), [{term(), pid()}], labels(), metrics()) -> metrics().
+conns_sup_metrics({Ref, _}, ConnsSups, Labels, Acc0) ->
 	Acc1 = sup_metrics(ConnsSups, Labels, Acc0),
+	ConnCounts = maps:get(metrics, ranch:info(Ref), #{}),
 	lists:foldl(
-		fun
-			({Id, Pid}, Acc2) ->
-				Labels1 = [{pid, Pid}, {id, Id}|Labels],
-				Counts = supervisor:count_children(Pid),
-				NSups = proplists:get_value(supervisors, Counts, 0),
-				NWorkers = proplists:get_value(workers, Counts, 0),
-				NActive = ranch_conns_sup:active_connections(Pid),
-				AllMetric = gauge_metric(Labels1, NSups + NWorkers),
-				ActiveMetric = gauge_metric(Labels1, NActive),
-				Acc3 = update_metrics(connections, AllMetric, Acc2),
-				update_metrics(active_connections, ActiveMetric, Acc3)
+		fun ({Id, Pid}, Acc2) ->
+			Labels1 = [{pid, Pid}, {id, Id}|Labels],
+			Counts = supervisor:count_children(Pid),
+			NSups = proplists:get_value(supervisors, Counts, 0),
+			NWorkers = proplists:get_value(workers, Counts, 0),
+			NActive = ranch_conns_sup:active_connections(Pid),
+			NAccepted = maps:get({conns_sup, Id, accept}, ConnCounts, undefined),
+			NTerminated = maps:get({conns_sup, Id, terminate}, ConnCounts, undefined),
+			update_metrics(
+				Labels1,
+				[
+					{gauge, connections, NSups + NWorkers},
+					{gauge, active_connections, NActive},
+					{counter, accepted_connections, NAccepted},
+					{counter, terminated_connections, NTerminated}
+				],
+				Acc2
+			)
 		end,
 		Acc1,
 		ConnsSups
 	).
 
 %% Metrics for a listener's acceptors_sup.
--spec acceptors_sup_metrics(pid(), labels(), metrics()) -> metrics().
-acceptors_sup_metrics(AcceptorsSup, Labels, Acc0) ->
+-spec acceptors_sup_metrics(listener(), pid(), labels(), metrics()) -> metrics().
+acceptors_sup_metrics(_Listener, AcceptorsSup, Labels, Acc0) ->
 	Acceptors = [{Id, Pid} || {{acceptor, _, Id}, Pid, worker, _} <- supervisor:which_children(AcceptorsSup), is_pid(Pid)],
 	Acc1 = sup_metrics(Acceptors, [{type, acceptor}|Labels], Acc0),
 	Counts = supervisor:count_children(AcceptorsSup),
 	N = proplists:get_value(workers, Counts, 0),
-	Metric = gauge_metric([{type, acceptors_sup}, {pid, AcceptorsSup}|Labels], N),
-	update_metrics(acceptors, Metric, Acc1).
+	update_metrics([{type, acceptors_sup}, {pid, AcceptorsSup}|Labels], [{gauge, acceptors, N}], Acc1).
 
 %% Metrics for a generic supervisor.
 -spec sup_metrics([{term(), pid()}], labels(), metrics()) -> metrics().
@@ -218,18 +235,10 @@ sup_metrics([{Id, Pid}|Sups], Labels, Acc0) ->
 	sup_metrics(Sups, Labels, Acc1).
 
 %% Process metrics.
--spec proc_metrics(pid(), list(), metrics()) -> #{atom() => [prometheus_model:'Metric'()]}.
-proc_metrics(Pid, Labels, Acc0) ->
+-spec proc_metrics(pid(), list(), metrics()) -> metrics().
+proc_metrics(Pid, Labels, Acc) ->
 	Stats = process_info(Pid, [memory, heap_size, min_heap_size, min_bin_vheap_size, stack_size, total_heap_size, message_queue_len, reductions, status]),
-	lists:foldl(
-		fun
-			({Key, Value}, Acc1) ->
-				Metric = gauge_metric(Labels, convert_proc_value(Key, Value)),
-				update_metrics(Key, Metric, Acc1)
-		end,
-		Acc0,
-		Stats
-	).
+	update_metrics(Labels, [{gauge, Key, convert_proc_value(Key, Value)} || {Key, Value} <- Stats], Acc).
 
 %% Convert the value of a process metric.
 -spec convert_proc_value(atom(), term()) -> number().
@@ -247,17 +256,30 @@ convert_proc_value(status, waiting) -> 6;
 convert_proc_value(_, Value) -> Value.
 
 %% Update the metrics collection with a new metric.
--spec update_metrics(atom(), prometheus_model:'Metric'(), metrics()) -> metrics().
-update_metrics(Name, Metric, Coll) ->
-	maps:update_with(Name, fun (Old) -> [Metric|Old] end, [Metric], Coll).
+-spec update_metrics(labels(), [{gauge | counter, atom(), number() | undefined | infinity}], metrics()) -> metrics().
+update_metrics(Labels, RawMetrics, Coll) ->
+	lists:foldl(
+		fun
+			({Type, Name, undefined}, Acc) ->
+				maps:update_with(Name, fun (Old) -> Old end, {Type, []}, Acc);
+			({gauge, Name, Value}, Acc) ->
+				NewMetric = prometheus_model_helpers:gauge_metric(Labels, Value),
+				maps:update_with(Name, fun ({gauge, OldMetrics}) -> {gauge, [NewMetric|OldMetrics]} end, {gauge, [NewMetric]}, Acc);
+			({counter, Name, Value}, Acc) ->
+				NewMetric = prometheus_model_helpers:counter_metric(Labels, Value),
+				maps:update_with(Name, fun ({counter, OldMetrics}) -> {counter, [NewMetric|OldMetrics]} end, {counter, [NewMetric]}, Acc)
+		end,
+		Coll,
+		RawMetrics
+	).
 
 %% Prometheus metrics from a metrics collection.
--spec metrics() -> [{atom(), atom(), string(), prometheus_model:'Metric'()}].
+-spec metrics() -> [{atom(), atom(), string(), [prometheus_model:'Metric'()]}].
 metrics() ->
 	maps:fold(
 		fun
-			(Key, Value, Acc) ->
-				[{name(Key), gauge, help(Key), Value}|Acc]
+			(Key, {Type, Metrics}, Acc) ->
+				[{name(Key), Type, help(Key), Metrics}|Acc]
 		end,
 		[],
 		ranch_metrics()
